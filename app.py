@@ -1,32 +1,49 @@
-from flask import Flask, request, jsonify, render_template
-from PIL import Image
-from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-import io
+import os
+from flask import Flask, request, jsonify, render_template, send_file
+import openpyxl
+from openpyxl import Workbook
+import tempfile
 
 app = Flask(__name__)
 
-# Initialize TrOCR model
-processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-handwritten")
-model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-handwritten")
+# Set a file size limit of 16 MB for uploads
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+
+# Error handler for file size exceeding limit
+@app.errorhandler(413)
+def handle_large_file(error):
+    return jsonify({'error': 'File size exceeds the 16MB limit'}), 413
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/extract', methods=['POST'])
-def extract_text():
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file uploaded'}), 400
+@app.route('/save_to_excel', methods=['POST'])
+def save_to_excel():
+    data = request.json
+    if 'words' not in data:
+        return jsonify({'error': 'No words provided'}), 400
 
-    file = request.files['file']
-    img = Image.open(io.BytesIO(file.read())).convert("RGB")
+    words = data['words']
+    combined_words = " ".join(words)
 
-    # Process the image using TrOCR
-    pixel_values = processor(images=img, return_tensors="pt").pixel_values
-    generated_ids = model.generate(pixel_values)
-    predicted_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+    # Create a new Excel workbook in a temporary file
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
+        excel_file_path = tmp_file.name
 
-    return jsonify({'text': predicted_text})
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Extracted Words"
+        ws.cell(row=1, column=1, value=combined_words)
+
+        wb.save(excel_file_path)
+
+    response = send_file(excel_file_path, as_attachment=True, download_name="extracted_words.xlsx")
+    
+    # Delete the file after sending it to avoid storage accumulation
+    os.remove(excel_file_path)
+
+    return response
 
 if __name__ == '__main__':
     app.run(debug=True, use_reloader=False, port=5001)
