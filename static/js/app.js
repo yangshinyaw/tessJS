@@ -1,17 +1,33 @@
 let uploadedImage = null;
 let detectedWords = [];
-let modifiedWords = [];
-let marginScale = 5;
-let boxSizeScale = 1;
 let wordScales = [];
-let isAddingBox = false;
-let isDeletingBox = false;
-let isResizing = false;
-let isDragging = false;
-let activeBox = null;
-let resizeDirection = null;
-let dragOffsetX = 0;
-let dragOffsetY = 0;
+let marginScale = 5;
+
+// Listen for the New Upload button click
+document.getElementById('newUploadButton').addEventListener('click', handleNewUpload);
+
+function handleNewUpload() {
+    // Clear previous extracted words from the webpage
+    const predictedWords = document.getElementById('predictedWords');
+    predictedWords.innerHTML = ''; // Clear the list
+
+    // Clear the canvas
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Reset the word detection count
+    document.getElementById('wordCount').textContent = 'Words Detected: 0';
+
+    // Enable file input for new image upload
+    document.getElementById('fileInput').click();
+
+    // Disable other buttons until a new image is uploaded
+    document.getElementById('detectButton').disabled = true;
+    document.getElementById('extractButton').disabled = true;
+    document.getElementById('saveZipButton').disabled = true;
+    document.getElementById('saveExcelButton').disabled = true;
+}
 
 // Listen for file upload
 document.getElementById('fileInput').addEventListener('change', handleImageUpload);
@@ -31,13 +47,18 @@ function handleImageUpload(event) {
         ctx.drawImage(img, 0, 0);
         uploadedImage = img;
         detectedWords = [];
-        modifiedWords = []; // Clear any modifications on a new upload
+
+        // Enable other buttons after a new image is uploaded
+        document.getElementById('detectButton').disabled = false;
+        document.getElementById('extractButton').disabled = false;
+        document.getElementById('saveZipButton').disabled = false;
+        document.getElementById('saveExcelButton').disabled = false;
     };
 
     img.src = URL.createObjectURL(file);
 }
 
-// Listen for Detect Words button click
+// Handle the "Detect Words" button click
 document.getElementById('detectButton').addEventListener('click', handleDetection);
 
 async function handleDetection() {
@@ -54,7 +75,7 @@ async function handleDetection() {
     const contours = detectContours(canvas);
 
     // Group contours into lines and merge nearby contours into words
-    const mergedWords = groupContoursIntoLinesAndWords(contours, 70, 40); // Increased horizontal and vertical thresholds
+    const mergedWords = groupContoursIntoLinesAndWords(contours, 70, 40);
 
     detectedWords = mergedWords.map(contour => ({
         bbox: {
@@ -67,13 +88,7 @@ async function handleDetection() {
     }));
 
     wordScales = detectedWords.map(() => ({ width: 1, height: 1 }));
-
-    sortAndRedrawWords(); // Ensure proper sorting after detection
-
-    // Update sliders and word controls
-    document.getElementById('wordIndex').max = detectedWords.length - 1;
-    document.getElementById('widthScale').value = wordScales[0].width;
-    document.getElementById('heightScale').value = wordScales[0].height;
+    sortAndRedrawWords();
 }
 
 // Handle the "Extract Words" button click for TrOCR
@@ -103,7 +118,37 @@ document.getElementById('extractButton').addEventListener('click', async () => {
     }
 });
 
-// Function to preprocess the image (Grayscale + Adaptive Thresholding)
+document.getElementById('saveExcelButton').addEventListener('click', saveWordsToExcel);
+
+async function saveWordsToExcel() {
+    const predictedWords = Array.from(document.querySelectorAll("#predictedWords li")).map(li => li.textContent);
+
+    if (predictedWords.length === 0) {
+        alert("No words to save!");
+        return;
+    }
+
+    // Send the predicted words to the backend for saving to Excel
+    const response = await fetch('/save_to_excel', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ words: predictedWords })
+    });
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'extracted_words.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+
+// Preprocess the image (grayscale + binarization)
 function preprocessImage(canvas) {
     const ctx = canvas.getContext('2d');
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -115,7 +160,7 @@ function preprocessImage(canvas) {
         data[i] = data[i + 1] = data[i + 2] = avg;
     }
 
-    // Apply a simple binarization threshold
+    // Apply binarization threshold
     const threshold = 128;
     for (let i = 0; i < data.length; i += 4) {
         const avg = data[i];
@@ -126,7 +171,7 @@ function preprocessImage(canvas) {
     ctx.putImageData(imageData, 0, 0);
 }
 
-// Function to detect contours (using basic CCA + contour detection logic)
+// Detect contours using CCA (Connected Component Analysis)
 function detectContours(canvas) {
     const ctx = canvas.getContext('2d');
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -246,14 +291,14 @@ function groupContoursIntoLinesAndWords(contours, horizontalThreshold, verticalT
     return mergedWords;
 }
 
-// Sort boxes from left to right, top to bottom, and redraw
+// Sort boxes from top to bottom, left to right
 function sortAndRedrawWords() {
-    // Sort by y-coordinate first, and x-coordinate second (left to right, top to bottom)
+    // Sort by y-coordinate first, and x-coordinate second (top to bottom, left to right)
     detectedWords.sort((a, b) => {
         if (a.bbox.y0 !== b.bbox.y0) {
-            return a.bbox.y0 - b.bbox.y0; // Sort by y0 first
+            return a.bbox.y0 - b.bbox.y0; // Sort by y0 first (top to bottom)
         }
-        return a.bbox.x0 - b.bbox.x0; // If y0 is equal, sort by x0
+        return a.bbox.x0 - b.bbox.x0; // If y0 is equal, sort by x0 (left to right)
     });
 
     redrawWords();
@@ -287,18 +332,19 @@ function redrawWords() {
         ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
 
         // Display the word index above the box
-        ctx.font = `${16 * boxSizeScale}px Arial`;
+        ctx.font = `${16}px Arial`;
         ctx.fillStyle = 'blue';
         ctx.fillText(index + 1, x0, y0 - 5); // Index is 1-based
     });
 }
 
-// Function to send cropped word to backend
+// Function to send cropped word to Hugging Face Streamlit backend
 async function sendCroppedWordToBackend(wordImageBlob, wordIndex) {
     const formData = new FormData();
     formData.append('file', wordImageBlob);
 
-    const response = await fetch('/extract', {
+    // Replace with your Hugging Face Spaces API endpoint for TrOCR
+    const response = await fetch('https://huggingface.co/spaces/eguls/trOCR', {
         method: 'POST',
         body: formData
     });
@@ -306,131 +352,10 @@ async function sendCroppedWordToBackend(wordImageBlob, wordIndex) {
     const data = await response.json();
     const predictedWords = document.getElementById('predictedWords');
     const wordItem = document.createElement("li");
-    wordItem.textContent = `Word ${wordIndex + 1}: ${data.text}`;
+    wordItem.textContent = `${data.text}`;
     predictedWords.appendChild(wordItem);
 }
 
-// Additional features for adding and deleting boxes manually
-document.getElementById('addBoxButton').addEventListener('click', () => {
-    isAddingBox = true;
-    isDeletingBox = false;
-    document.getElementById('canvas').style.cursor = 'crosshair';
-});
-
-document.getElementById('deleteBoxButton').addEventListener('click', () => {
-    isDeletingBox = true;
-    isAddingBox = false;
-    document.getElementById('canvas').style.cursor = 'pointer';
-});
-
-document.getElementById('canvas').addEventListener('click', (event) => {
-    const canvas = document.getElementById('canvas');
-    const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-
-    if (isAddingBox) {
-        const newWord = {
-            text: 'New Box',
-            bbox: {
-                x0: x - 50,
-                y0: y - 25,
-                x1: x + 50,
-                y1: y + 25
-            }
-        };
-        detectedWords.push(newWord);
-        wordScales.push({ width: 1, height: 1 });
-        sortAndRedrawWords(); // Sort and redraw after adding a new box
-        isAddingBox = false;
-        document.getElementById('canvas').style.cursor = 'default';
-    } else if (isDeletingBox) {
-        for (let i = 0; i < detectedWords.length; i++) {
-            const word = detectedWords[i];
-            if (x >= word.bbox.x0 && x <= word.bbox.x1 && y >= word.bbox.y0 && y <= word.bbox.y1) {
-                detectedWords.splice(i, 1);
-                wordScales.splice(i, 1);
-                sortAndRedrawWords(); // Sort and redraw after deleting a box
-                break;
-            }
-        }
-        isDeletingBox = false;
-        document.getElementById('canvas').style.cursor = 'default';
-    }
-});
-
-// Enable dragging and resizing boxes
-document.getElementById('canvas').addEventListener('mousedown', (event) => {
-    const canvas = document.getElementById('canvas');
-    const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-
-    // Check if inside the box for dragging
-    for (let i = 0; i < detectedWords.length; i++) {
-        const word = detectedWords[i];
-        const bbox = word.bbox;
-        if (x >= bbox.x0 && x <= bbox.x1 && y >= bbox.y0 && y <= bbox.y1) {
-            activeBox = word;
-            dragOffsetX = x - bbox.x0;
-            dragOffsetY = y - bbox.y0;
-            isDragging = true;
-            return;
-        }
-    }
-});
-
-document.getElementById('canvas').addEventListener('mousemove', (event) => {
-    if (!activeBox) return;
-
-    const canvas = document.getElementById('canvas');
-    const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-
-    if (isDragging) {
-        moveBox(x, y);
-    }
-});
-
-document.getElementById('canvas').addEventListener('mouseup', () => {
-    isDragging = false;
-    activeBox = null;
-    sortAndRedrawWords(); // Sort and redraw after moving a box
-});
-
-function moveBox(x, y) {
-    if (!activeBox) return;
-    const bbox = activeBox.bbox;
-    const width = bbox.x1 - bbox.x0;
-    const height = bbox.y1 - bbox.y0;
-
-    bbox.x0 = Math.max(0, x - dragOffsetX);
-    bbox.y0 = Math.max(0, y - dragOffsetY);
-    bbox.x1 = Math.min(canvas.width, bbox.x0 + width);
-    bbox.y1 = Math.min(canvas.height, bbox.y0 + height);
-
-    redrawWords();
-}
-
-// Update width and height scales when word index changes
-document.getElementById('wordIndex').addEventListener('input', (event) => {
-    const index = parseInt(event.target.value);
-    document.getElementById('widthScale').value = wordScales[index].width;
-    document.getElementById('heightScale').value = wordScales[index].height;
-});
-
-document.getElementById('widthScale').addEventListener('input', (event) => {
-    const index = parseInt(document.getElementById('wordIndex').value);
-    wordScales[index].width = parseFloat(event.target.value);
-    redrawWords();
-});
-
-document.getElementById('heightScale').addEventListener('input', (event) => {
-    const index = parseInt(document.getElementById('wordIndex').value);
-    wordScales[index].height = parseFloat(event.target.value);
-    redrawWords();
-});
 
 // Listen for the Save Words as ZIP button click
 document.getElementById('saveZipButton').addEventListener('click', saveWordsAsZip);
@@ -465,44 +390,6 @@ async function saveWordsAsZip() {
         });
     }
 
-    let slideIndex = 0;
-    showSlides();
-
-    function showSlides() {
-        let i;
-        let slides = document.getElementsByClassName("slides");
-        let dots = document.getElementsByClassName("dot");
-
-        // Hide all slides
-        for (i = 0; i < slides.length; i++) {
-            slides[i].style.display = "none";
-        }
-
-        // Remove "active" class from all dots
-        for (i = 0; i < dots.length; i++) {
-            dots[i].className = dots[i].className.replace(" active", "");
-        }
-
-        // Move to the next slide
-        slideIndex++;
-        if (slideIndex > slides.length) {slideIndex = 1}
-
-        // Show the current slide
-        slides[slideIndex - 1].style.display = "block";
-
-        // Highlight the active dot
-        dots[slideIndex - 1].className += " active";
-
-        // Set timer for automatic slide transition
-        setTimeout(showSlides, 3000); // Change slide every 3 seconds
-    }
-
-    function currentSlide(n) {
-        slideIndex = n;
-        showSlides();
-    }
-
-
     // Generate the ZIP file and trigger the download
     zip.generateAsync({ type: 'blob' }).then((content) => {
         const link = document.createElement('a');
@@ -511,3 +398,4 @@ async function saveWordsAsZip() {
         link.click();
     });
 }
+
